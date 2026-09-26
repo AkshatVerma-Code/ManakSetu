@@ -8,6 +8,7 @@ import RelationshipGraph from '@/components/graph/RelationshipGraph';
 export default function RecommendationsClient({ tenderId }: { tenderId: string }) {
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [selectedRec, setSelectedRec] = useState<string | null>(null);
+  const [acceptedIds, setAcceptedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -157,8 +158,16 @@ export default function RecommendationsClient({ tenderId }: { tenderId: string }
             <button className="px-4 py-2 bg-text-secondary/10 text-text-primary rounded font-medium text-sm hover:bg-text-secondary/20 transition-colors">
               Needs Verification
             </button>
-            <button className="px-4 py-2 bg-success text-surface rounded font-medium text-sm hover:bg-success/90 transition-colors">
-              Accept
+            <button
+              onClick={() => setAcceptedIds(prev => prev.includes(activeRec.id) ? prev : [...prev, activeRec.id])}
+              className={`px-4 py-2 rounded font-medium text-sm transition-colors ${
+                acceptedIds.includes(activeRec.id)
+                  ? 'bg-success/80 text-surface cursor-default'
+                  : 'bg-success text-surface hover:bg-success/90'
+              }`}
+              disabled={acceptedIds.includes(activeRec.id)}
+            >
+              {acceptedIds.includes(activeRec.id) ? 'Accepted' : 'Accept'}
             </button>
           </div>
         </div>

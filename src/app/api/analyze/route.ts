@@ -4,29 +4,77 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-// Keeping the model name exactly as it was configured
-const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
-const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001';
 
-async function generateContentWithRetry(model: any, prompt: any, inlineData: any, maxRetries = 3) {
-  let attempt = 0;
-  while (attempt < maxRetries) {
-    try {
-      const result = await model.generateContent([prompt, inlineData]);
-      return result;
-    } catch (error: any) {
-      if (error && error.status === 503) {
-        attempt++;
-        if (attempt >= maxRetries) throw error;
-        console.warn(`[503 Service Unavailable] Gemini experiencing high demand. Retrying in ${attempt * 4} seconds...`);
-        await new Promise(res => setTimeout(res, attempt * 4000)); // Exponential-ish fallback 4s, 8s, 12s
-      } else {
-        throw error;
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+if (!GEMINI_API_KEY) {
+  console.warn('GEMINI_API_KEY is not set. Gemini requests will fail until it is configured.');
+}
+
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+
+const GEMINI_MODEL_FALLBACKS = [
+  GEMINI_MODEL,
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-pro'
+].filter((value, index, array) => value && array.indexOf(value) === index);
+
+function getGeminiModel(modelName: string) {
+  return genAI.getGenerativeModel({ model: modelName });
+}
+
+function formatGeminiError(error: any) {
+  if (!error) return 'Unknown Gemini error';
+
+  const status = error.status ?? error.code ?? 'unknown';
+  const message = error.message || 'No details provided';
+
+  if (status === 404 || status === 400) {
+    return `Gemini model configuration error: ${message}. Check GEMINI_MODEL and GEMINI_API_KEY.`;
+  }
+
+  return `Gemini request failed (${status}): ${message}`;
+}
+
+async function generateContentWithRetry(prompt: any, inlineData: any, maxRetries = 3) {
+  let lastError: any = null;
+
+  for (const modelName of GEMINI_MODEL_FALLBACKS) {
+    let attempt = 0;
+
+    while (attempt < maxRetries) {
+      try {
+        const model = getGeminiModel(modelName);
+        const result = await model.generateContent([prompt, inlineData]);
+        return result;
+      } catch (error: any) {
+        lastError = error;
+
+        const status = error?.status ?? error?.code;
+        const isRetryable = status === 503 || status === 429 || status === 500;
+
+        if (isRetryable && attempt < maxRetries - 1) {
+          attempt++;
+          console.warn(`[${status}] Gemini ${modelName} is temporarily unavailable. Retrying in ${attempt * 4} seconds...`);
+          await new Promise(res => setTimeout(res, attempt * 4000));
+          continue;
+        }
+
+        if (status === 404 || status === 400) {
+          console.warn(`Gemini model ${modelName} is unavailable; trying fallback models...`);
+          break;
+        }
+
+        throw new Error(formatGeminiError(error));
       }
     }
   }
+
+  throw new Error(formatGeminiError(lastError));
 }
 
 export async function POST(request: Request) {
@@ -74,15 +122,25 @@ export async function POST(request: Request) {
       Respond with ONLY the raw JSON array. Do not include markdown code block formatting like \`\`\`json.
     `;
 
-    // Process with Gemini Vision / Context with internal retry logic
-    const result = await generateContentWithRetry(model, prompt, { inlineData: { data: base64PDF, mimeType: "application/pdf" } });
+    let extractedReqs: any[] = [];
 
-    let textResp = result.response.text().trim();
-    if (textResp.startsWith('```json')) {
-      textResp = textResp.replace(/```json/g, '').replace(/```/g, '').trim();
+    try {
+      // Process with Gemini Vision / Context with internal retry logic
+      const result = await generateContentWithRetry(prompt, { inlineData: { data: base64PDF, mimeType: "application/pdf" } });
+
+      let textResp = result.response.text().trim();
+      if (textResp.startsWith('```json')) {
+        textResp = textResp.replace(/```json/g, '').replace(/```/g, '').trim();
+      }
+
+      extractedReqs = JSON.parse(textResp);
+    } catch (err: any) {
+      console.error('Gemini extraction failed:', err);
+      await supabase.from('tenders').update({ status: 'analysis_failed' }).eq('id', tender.id);
+      return NextResponse.json({ 
+        error: 'Gemini AI is temporarily unavailable. Please try again later or check the service status.'
+      }, { status: 503 });
     }
-
-    let extractedReqs = JSON.parse(textResp);
 
     console.log(`Extracted ${extractedReqs.length} requirements`);
 
@@ -91,8 +149,15 @@ export async function POST(request: Request) {
       if (!req.requirement || !req.value) continue;
 
       const embedText = `${req.category} | ${req.requirement} | ${req.value} | ${req.source_text}`;
-      const embedResp = await embeddingModel.embedContent(embedText);
-      const embedding = embedResp.embedding.values.slice(0, 768);
+      let embedding = new Array(768).fill(0);
+
+      try {
+        const embeddingModel = getGeminiModel(EMBEDDING_MODEL);
+        const embedResp = await embeddingModel.embedContent(embedText);
+        embedding = embedResp.embedding.values.slice(0, 768);
+      } catch (embedErr) {
+        console.warn('Embedding failed, using zero vector fallback:', embedErr);
+      }
 
       await supabase.from('tender_requirements').insert({
         tender_id: tender.id,

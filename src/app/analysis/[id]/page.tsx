@@ -68,6 +68,10 @@ export default async function AnalysisPage(props: Props) {
                <span className="flex items-center gap-1 text-success font-medium">
                  <CheckCircle2 size={16} /> Extraction Complete
                </span>
+            ) : tender.status === 'analysis_failed' ? (
+               <span className="flex items-center gap-1 text-danger font-medium">
+                 <span className="text-lg leading-none">!</span> AI extraction failed. Please retry later.
+               </span>
             ) : (
                <span className="flex items-center gap-1 text-warning font-medium">
                  <Loader2 className="animate-spin" size={16} /> Analyzing PDF Structure (Refresh in 10s...)
@@ -108,7 +112,7 @@ export default async function AnalysisPage(props: Props) {
         <div className="flex justify-end">
           <Link 
             href={`/analysis/${params.id}/recommendations`}
-            className={`bg-primary text-surface px-6 py-3 rounded font-medium flex items-center gap-2 hover:bg-primary/90 transition-colors ${requirements.length === 0 ? 'opacity-50 pointer-events-none' : ''}`}
+            className={`bg-primary text-surface px-6 py-3 rounded font-medium flex items-center gap-2 hover:bg-primary/90 transition-colors ${tender.status !== 'analyzed' || requirements.length === 0 ? 'opacity-50 pointer-events-none' : ''}`}
           >
             Retrieve Standard Recommendations
             <ChevronRight size={20} />

@@ -8,6 +8,7 @@ export default function FileUploader() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const router = useRouter();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -18,6 +19,8 @@ export default function FileUploader() {
 
   const handleUploadAndAnalyze = async () => {
     if (!file) return;
+
+    setErrorMessage(null);
     setUploading(true);
     
     try {
@@ -54,7 +57,7 @@ export default function FileUploader() {
       router.push(`/analysis/${tenderId}`);
 
     } catch (e: any) {
-      alert("Pipeline Error: " + e.message);
+      setErrorMessage(e.message || 'Pipeline failed. Please try again later.');
       setUploading(false);
       setAnalyzing(false);
     }
@@ -80,6 +83,12 @@ export default function FileUploader() {
           {file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "PDF (Max 50MB)"}
         </p>
       </label>
+
+      {errorMessage && (
+        <div className="mb-4 rounded border border-red-400 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage}
+        </div>
+      )}
 
       <div className="flex justify-center gap-4">
         <button 
